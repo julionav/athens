@@ -3,6 +3,7 @@
     [athens.db :as db]
     [athens.electron :as electron]
     [athens.events :as events]
+    [athens.keybindings :refer [mousetrap]]
     [athens.parse-renderer :refer [parse-and-render]]
     [athens.style :as style]
     [athens.util :as util]
@@ -316,6 +317,38 @@
 
 
 ;; View
+;; Handlers will come from textarea-keydown
+(defn content-keybindings
+  [uid state child]
+  (let [event-wrapper
+        ;; Only handle event if the currently editing uid is the same
+        ;; as this block; and there aren't any selected item.
+        (fn [callback-or-config _]
+          (let [wrap-callback
+                (fn [callback]
+                  (fn [event]
+                    (let [editing? (= uid @(rf/subscribe [:editing/uid]))
+                          not-selecting-items? (empty? @(rf/subscribe [:selected/items]))]
+                      (if (and editing? not-selecting-items?)
+                        (callback event)))))]
+            (if (map? callback-or-config)
+              (update callback-or-config :callback wrap-callback)
+              (wrap-callback callback-or-config))))]
+    [mousetrap
+     (util/map-map-values event-wrapper
+                          (merge
+                            {["shift+up" "shift+down"]    (partial textarea-keydown/handle-arrow-key-with-shift uid state)
+                             ["mod+down" "mod+up"] (partial textarea-keydown/handle-arrow-key-with-mod uid state)
+                             ["up" "down" "right" "left"] {:callback (partial textarea-keydown/handle-arrow-key uid state)
+                                                           :stop-propagation? false}
+                             ["tab" "shift+tab"] textarea-keydown/handle-tab
+                             ["enter" "mod+enter" "shift+enter"] (partial textarea-keydown/handle-enter uid state)
+                             "backspace"                  (partial textarea-keydown/handle-backspace uid state)
+                             "del"                        (partial textarea-keydown/handle-delete uid state)
+                             "esc"                        (partial textarea-keydown/handle-escape state)}
+                            (textarea-keydown/shortcut-handlers uid state)))
+     child]))
+
 
 (defn block-content-el
   "Actual string contents. Two elements, one for reading and one for writing.
@@ -336,17 +369,18 @@
          ;; NOTE: komponentit forces reflow, likely a performance bottle neck
          ;; When block is in editing mode or the editing DOM elements are rendered
          (when (or (:show-editable-dom @state) editing?)
-           [autosize/textarea {:value          (:string/local @state)
-                               :class          ["textarea" (when (and (empty? @selected-items) @editing?) "is-editing")]
-                               ;; :auto-focus  true
-                               :id             (str "editable-uid-" uid)
-                               :on-change      (fn [e] (textarea-change e uid state))
-                               :on-paste       (fn [e] (textarea-paste e uid state))
-                               :on-key-down    (fn [e] (textarea-keydown/textarea-key-down e uid state))
-                               :on-blur        (fn [_] (db/transact-state-for-uid (or original-uid uid) state))
-                               :on-click       (fn [e] (textarea-click e uid state))
-                               :on-mouse-enter (fn [e] (textarea-mouse-enter e uid state))
-                               :on-mouse-down  (fn [e] (textarea-mouse-down e uid state))}])
+           [content-keybindings uid state
+            [autosize/textarea {:value          (:string/local @state)
+                                :class          ["textarea" (when (and (empty? @selected-items) @editing?) "is-editing")]
+                                ;; :auto-focus  true
+                                :id             (str "editable-uid-" uid)
+                                :on-change      (fn [e] (textarea-change e uid state))
+                                :on-paste       (fn [e] (textarea-paste e uid state))
+                                :on-key-down    (fn [e] (textarea-keydown/textarea-key-down e uid state))
+                                :on-blur        (fn [_] (db/transact-state-for-uid (or original-uid uid) state))
+                                :on-click       (fn [e] (textarea-click e uid state))
+                                :on-mouse-enter (fn [e] (textarea-mouse-enter e uid state))
+                                :on-mouse-down  (fn [e] (textarea-mouse-down e uid state))}]])
          ;; TODO pass `state` to parse-and-render
          [parse-and-render (:string/local @state) (or original-uid uid)]]))))
 

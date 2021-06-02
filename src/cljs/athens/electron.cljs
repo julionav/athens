@@ -358,6 +358,7 @@
                                      {:when       :seen?
                                       :events     :reset-conn
                                       :dispatch-n [[:local-storage/set-theme]
+                                                   [:keymap/load-from-localstorage]
                                                    #_[:local-storage/navigate]]}
 
                                      ;; whether first or nth time, update athens pages

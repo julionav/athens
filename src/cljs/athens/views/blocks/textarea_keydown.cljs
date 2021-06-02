@@ -294,47 +294,54 @@
   (-> coll count dec))
 
 
-(defn handle-arrow-key
-  [e uid state]
-  (let [{:keys [key-code shift ctrl target selection]} (destruct-key-down e)
-        selection?      (not (blank? selection))
-        start?          (block-start? e)
-        end?            (block-end? e)
-        {:search/keys [results type index] caret-position :caret-position} @state
-        textarea-height (.. target -offsetHeight) ; this height is accurate, but caret-position height is not updating
+(defn arrow-keys-shared-context
+  [e]
+  (let [{:keys [key-code target]} (destruct-key-down e)
+        caret-position  (get-caret-position (.-target e))
+        textarea-height (.. target -offsetHeight)
         {:keys [top height]} caret-position
         rows            (js/Math.round (/ textarea-height height))
         row             (js/Math.ceil (/ top height))
         top-row?        (= row 1)
-        bottom-row?     (= row rows)
-        up?             (= key-code KeyCodes.UP)
-        down?           (= key-code KeyCodes.DOWN)
-        left?           (= key-code KeyCodes.LEFT)
-        right?          (= key-code KeyCodes.RIGHT)
+        bottom-row?     (= row rows)]
+    {:target target
+     :top-row? top-row?
+     :bottom-row? bottom-row?
+     :up?             (= key-code KeyCodes.UP)
+     :down?           (= key-code KeyCodes.DOWN)
+     :left?           (= key-code KeyCodes.LEFT)
+     :right?          (= key-code KeyCodes.RIGHT)}))
+
+
+(defn handle-arrow-key-with-shift
+  [uid e]
+  (let [{:keys [up? down? top-row? bottom-row? target]} (arrow-keys-shared-context e)]
+    (when (or (and up? top-row?)
+              (and down? bottom-row?))
+      (.. target blur)
+      (dispatch [:selected/add-item uid]))))
+
+
+(defn handle-arrow-key-with-mod
+  [uid e]
+  (let [{:keys [down?]} (arrow-keys-shared-context e)
+        [uid _]        (db/uid-and-embed-id uid)
+        new-open-state down?
+        event [:transact [[:db/add [:block/uid uid] :block/open new-open-state]]]]
+    (.. e preventDefault)
+    (dispatch event)))
+
+
+(defn handle-arrow-key
+  [uid state e]
+  (let [{:keys [selection]} (destruct-key-down e)
+        {:keys [down? up? right? left? top-row? bottom-row?]} (arrow-keys-shared-context e)
+        selection?      (not (blank? selection))
+        start?          (block-start? e)
+        end?            (block-end? e)
+        {:search/keys [results type index]} @state
         header          (db/v-by-ea (db/e-by-av :block/uid uid) :block/header)]
-
     (cond
-      ;; Shift: select block if leaving block content boundaries (top or bottom rows). Otherwise select textarea text (default)
-      shift (cond
-              left? nil
-              right? nil
-              (or (and up? top-row?)
-                  (and down? bottom-row?)) (do
-                                             (.. target blur)
-                                             (dispatch [:selected/add-item uid])))
-
-      ;; Control: fold or unfold blocks
-      ctrl (cond
-             left? nil
-             right? nil
-             (or up? down?) (let [[uid _]        (db/uid-and-embed-id uid)
-                                  new-open-state (cond
-                                                   up? false
-                                                   down? true)
-                                  event [:transact [[:db/add [:block/uid uid] :block/open new-open-state]]]]
-                              (.. e preventDefault)
-                              (dispatch event)))
-
       ;; Type, one of #{:slash :block :page}: If slash commands or inline search is open, cycle through options
       type (cond
              (or left? right?) (swap! state assoc :search/index 0 :search/type nil)
@@ -367,7 +374,7 @@
 (defn handle-tab
   "Bug: indenting sets the cursor position to 0, likely because a new textarea element is created on the DOM. Set selection appropriately.
   See :indent event for why value must be passed as well."
-  [e _uid _state]
+  [e]
   (.. e preventDefault)
   (let [{:keys [shift] :as d-key-down} (destruct-key-down e)
         selected-items                 @(subscribe [:selected/items])
@@ -379,8 +386,7 @@
 
 
 (defn handle-escape
-  "BUG: escape is fired 24 times for some reason."
-  [e state]
+  [state e]
   (.. e preventDefault)
   (swap! state assoc :search/type nil)
   (dispatch [:editing/uid nil]))
@@ -391,7 +397,7 @@
 
 
 (defn handle-enter
-  [e uid state]
+  [uid state e]
   (let [{:keys [shift ctrl meta head tail value] :as d-key-down} (destruct-key-down e)
         {:search/keys [type]} @state]
     (.. e preventDefault)
@@ -436,103 +442,108 @@
     (str around selection around)))
 
 
-(defn surround-and-set
-  ;; Default to n=2 because it's more common.
-  ([e state surround-text]
-   (surround-and-set e state surround-text 2))
-  ([e _ surround-text n]
-   (let [{:keys [selection start end target]} (destruct-key-down e)
-         selection?       (not= start end)]
-     (.preventDefault e)
-     (.stopPropagation e)
-     (let [selection (surround selection surround-text)]
-
-       (replace-selection-with selection)
-       (if selection?
-         (set-selection target (+ n start) (+ n end))
-         (set-cursor-position target (+ start n)))))))
-
-
 ;; TODO: put text caret in correct position
-(defn handle-shortcuts
-  [e uid state]
-  (let [{:keys [key-code head tail selection target value shift]} (destruct-key-down e)]
-    (cond
-      (and (= key-code KeyCodes.A) (= selection value)) (let [closest-node-page  (.. target (closest ".node-page"))
-                                                              closest-block-page (.. target (closest ".block-page"))
-                                                              closest            (or closest-node-page closest-block-page)
-                                                              block              (db/get-block [:block/uid (.. closest -dataset -uid)])
-                                                              children           (->> (:block/children block)
-                                                                                      (sort-by :block/order)
-                                                                                      (mapv :block/uid))]
-                                                          (dispatch [:selected/add-items children]))
-      ;; When undo no longer makes changes for local textarea, do datascript undo.
-      (= key-code KeyCodes.Z) (let [{:string/keys [local previous]} @state]
-                                (when (= local previous)
-                                  (if shift
-                                    (dispatch [:redo])
-                                    (dispatch [:undo]))))
+(defn shortcut-handlers
+  [uid state]
+  (let [surround-and-set (fn [surround-text e]
+                           (let [{:keys [start selection target end head tail]} (destruct-key-down e)
+                                 selection (surround selection surround-text)
+                                 new-str (str head selection tail)
+                                 selection? (not= start end)]
+                             ;; https://developer.mozilla.org/en-US/docs/Web/API/Document/execCommand
+                             ;; textarea setval will lose ability to undo/redo
 
-      (= key-code KeyCodes.B) (surround-and-set e state "**")
+                             ;; other note: execCommand is probably the simpler way
+                             ;; at least until a new standard comes around
 
-      (= key-code KeyCodes.I) (surround-and-set e state "*" 1)
+                             ;; be wary before updating electron - as chromium might drop support for execCommand
+                             ;; electron 11 - uses chromium < 90(latest) which supports execCommand
+                             (swap! state assoc :string/local new-str)
+                             (.. js/document (execCommand "insertText" false selection))
+                             (if selection?
+                               (do (setStart target (+ 2 start))
+                                   (setEnd target (+ 2 end)))
+                               (set-cursor-position target (+ start 2)))))]
+    {:content/bold (partial surround-and-set "**")
+     :content/italic (partial surround-and-set "*")
+     :content/strikethrough (partial surround-and-set "~~")
+     "mod+u" (partial surround-and-set "--")
+     :content/highlight (partial surround-and-set "^^")
+     "mod+z"
+     (fn []
+       (let [{:string/keys [local previous]} @state]
+         (when (= local previous)
+           (dispatch [:undo]))))
+     "mod+shift+z"
+     (fn []
+       (let [{:string/keys [local previous]} @state]
+         (when (= local previous)
+           (dispatch [:redo]))))
+     "mod+a"
+     (fn [e]
+       (let [{:keys [selection value]} (destruct-key-down e)]
+         (when (= selection value)
+           (let [{:keys [target]} (destruct-key-down e)
+                 closest-node-page (.. target (closest ".node-page"))
+                 closest-block-page (.. target (closest ".block-page"))
+                 closest (or closest-node-page closest-block-page)
+                 block (db/get-block [:block/uid (.. closest -dataset -uid)])
+                 children (->> (:block/children block)
+                               (sort-by :block/order)
+                               (mapv :block/uid))]
+             (dispatch [:selected/add-items children])))))
+     :content/open-current-block-or-page
+     (fn [e]
+       ;; if caret within [[brackets]] or #[[brackets]], navigate to that page
+       ;; if caret on a #hashtag, navigate to that page
+       ;; if caret within ((uid)), navigate to that uid
+       ;; otherwise zoom into current block
+       (let [{:keys [target head tail]} (destruct-key-down e)
+             [uid _] (db/uid-and-embed-id uid)
+             link (str (replace-first head #"(?s)(.*)\[\[" "")
+                       (replace-first tail #"(?s)\]\](.*)" ""))
+             hashtag (str (replace-first head #"(?s).*#" "")
+                          (replace-first tail #"(?s)\s(.*)" ""))
+             block-ref (str (replace-first head #"(?s)(.*)\(\(" "")
+                            (replace-first tail #"(?s)\)\)(.*)" ""))]
 
-      (= key-code KeyCodes.Y) (surround-and-set e state "~~")
+         ;; save block before navigating away
+         (db/transact-state-for-uid uid state)
 
-      (= key-code KeyCodes.U) (surround-and-set e state "--")
+         (cond
+           (and (re-find #"(?s)\[\[" head)
+                (re-find #"(?s)\]\]" tail)
+                (nil? (re-find #"(?s)\[" link))
+                (nil? (re-find #"(?s)\]" link)))
+           (let [eid (db/e-by-av :node/title link)
+                 uid (db/v-by-ea eid :block/uid)]
+             (if eid
+               (router/navigate-uid uid e)
+               (let [new-uid (athens.util/gen-block-uid)]
+                 (.blur target)
+                 (dispatch [:page/create link new-uid])
+                 (js/setTimeout #(router/navigate-uid new-uid e) 50))))
 
-      (= key-code KeyCodes.H) (surround-and-set e state "^^")
+           ;; same logic as link
+           (and (re-find #"(?s)#" head)
+                (re-find #"(?s)\s" tail))
+           (let [eid (db/e-by-av :node/title hashtag)
+                 uid (db/v-by-ea eid :block/uid)]
+             (if eid
+               (router/navigate-uid uid e)
+               (let [new-uid (athens.util/gen-block-uid)]
+                 (.blur target)
+                 (dispatch [:page/create link new-uid])
+                 (js/setTimeout #(router/navigate-uid new-uid e) 50))))
 
-      ;; if caret within [[brackets]] or #[[brackets]], navigate to that page
-      ;; if caret on a #hashtag, navigate to that page
-      ;; if caret within ((uid)), navigate to that uid
-      ;; otherwise zoom into current block
+           (and (re-find #"(?s)\(\(" head)
+                (re-find #"(?s)\)\)" tail)
+                (nil? (re-find #"(?s)\(" block-ref))
+                (nil? (re-find #"(?s)\)" block-ref))
+                (db/e-by-av :block/uid block-ref))
+           (router/navigate-uid block-ref e)
 
-      (= key-code KeyCodes.O) (let [[uid _]   (db/uid-and-embed-id uid)
-                                    link      (str (replace-first head #"(?s)(.*)\[\[" "")
-                                                   (replace-first tail #"(?s)\]\](.*)" ""))
-                                    hashtag   (str (replace-first head #"(?s).*#" "")
-                                                   (replace-first tail #"(?s)\s(.*)" ""))
-                                    block-ref (str (replace-first head #"(?s)(.*)\(\(" "")
-                                                   (replace-first tail #"(?s)\)\)(.*)" ""))]
-
-                                ;; save block before navigating away
-                                (db/transact-state-for-uid uid state)
-
-                                (cond
-                                  (and (re-find #"(?s)\[\[" head)
-                                       (re-find #"(?s)\]\]" tail)
-                                       (nil? (re-find #"(?s)\[" link))
-                                       (nil? (re-find #"(?s)\]" link)))
-                                  (let [eid (db/e-by-av :node/title link)
-                                        uid (db/v-by-ea eid :block/uid)]
-                                    (if eid
-                                      (router/navigate-uid uid e)
-                                      (let [new-uid (athens.util/gen-block-uid)]
-                                        (.blur target)
-                                        (dispatch [:page/create link new-uid])
-                                        (js/setTimeout #(router/navigate-uid new-uid e) 50))))
-
-                                  ;; same logic as link
-                                  (and (re-find #"(?s)#" head)
-                                       (re-find #"(?s)\s" tail))
-                                  (let [eid (db/e-by-av :node/title hashtag)
-                                        uid (db/v-by-ea eid :block/uid)]
-                                    (if eid
-                                      (router/navigate-uid uid e)
-                                      (let [new-uid (athens.util/gen-block-uid)]
-                                        (.blur target)
-                                        (dispatch [:page/create link new-uid])
-                                        (js/setTimeout #(router/navigate-uid new-uid e) 50))))
-
-                                  (and (re-find #"(?s)\(\(" head)
-                                       (re-find #"(?s)\)\)" tail)
-                                       (nil? (re-find #"(?s)\(" block-ref))
-                                       (nil? (re-find #"(?s)\)" block-ref))
-                                       (db/e-by-av :block/uid block-ref))
-                                  (router/navigate-uid block-ref e)
-
-                                  :else (router/navigate-uid uid e))))))
+           :else (router/navigate-uid uid e))))}))
 
 
 (defn pair-char?
@@ -599,7 +610,7 @@
 ;; Backspace
 
 (defn handle-backspace
-  [e uid state]
+  [uid state e]
   (let [{:keys [start value target end]} (destruct-key-down e)
         no-selection? (= start end)
         sub-str (subs value (dec start) (inc start))
@@ -665,7 +676,7 @@
 
 (defn handle-delete
   "Delete has the same behavior as pressing backspace on the next block."
-  [e uid state]
+  [uid state e]
   (let [{:keys [start end value]} (destruct-key-down e)
         no-selection?             (= start end)
         end?                      (= end (count value))
@@ -683,9 +694,7 @@
   [e uid state]
   ;; don't process key events from block that lost focus (quick Enter & Tab)
   (when (= uid @(subscribe [:editing/uid]))
-    (let [d-event (destruct-key-down e)
-          {:keys [meta ctrl key-code]} d-event]
-
+    (let [d-event (destruct-key-down e)]
       ;; used for paste, to determine if shift key was held down
       (swap! state assoc :last-keydown d-event)
 
@@ -694,18 +703,9 @@
         (let [caret-position (get-caret-position (.. e -target))]
           (swap! state assoc :caret-position caret-position)))
 
-      ;; dispatch center
-      ;; only when nothing is selected or duplicate/events dispatched
-      ;; after some ops(like delete) can cause errors
+      ;; Handle search
       (when (empty? @(subscribe [:selected/items]))
         (cond
-          (arrow-key-direction e)         (handle-arrow-key e uid state)
           (pair-char? e)                  (handle-pair-char e uid state)
-          (= key-code KeyCodes.TAB)       (handle-tab e uid state)
-          (= key-code KeyCodes.ENTER)     (handle-enter e uid state)
-          (= key-code KeyCodes.BACKSPACE) (handle-backspace e uid state)
-          (= key-code KeyCodes.DELETE)    (handle-delete e uid state)
-          (= key-code KeyCodes.ESC)       (handle-escape e state)
-          (shortcut-key? meta ctrl)       (handle-shortcuts e uid state)
           (is-character-key? e)           (write-char e uid state))))))
 

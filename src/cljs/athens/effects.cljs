@@ -3,12 +3,14 @@
     [athens.config :as config]
     [athens.datsync-utils :as dat-s]
     [athens.db :as db]
+    [athens.keybindings :refer [bind-changeable-global-keybindings]]
     [athens.util :as util]
     [athens.walk :as walk]
     [athens.ws-client :as ws]
     [cljs-http.client :as http]
     [cljs.core.async :refer [go <!]]
     [cljs.pprint :refer [pprint]]
+    [clojure.edn :as edn]
     [clojure.string :as str]
     [dat.sync.client]
     [datascript.core :as d]
@@ -280,6 +282,22 @@
 
 
 (reg-fx
+  :local-storage/assoc!
+  (fn [[storage-key key value]]
+    (let [old-value (or (edn/read-string (js/localStorage.getItem storage-key)) {})
+          new-value (assoc old-value key value)]
+      (js/localStorage.setItem storage-key new-value))))
+
+
+(reg-fx
+  :local-storage/dissoc!
+  (fn [[storage-key key]]
+    (let [old-value (or (edn/read-string (js/localStorage.getItem storage-key)) {})
+          new-value (dissoc old-value key)]
+      (js/localStorage.setItem storage-key new-value))))
+
+
+(reg-fx
   :local-storage/set-db!
   (fn [db]
     (js/localStorage.setItem "datascript/DB" (dt/write-transit-str db))))
@@ -387,3 +405,16 @@
     (let [right-sidebar (js/document.querySelector ".right-sidebar-content")]
       (when right-sidebar
         (set! (.. right-sidebar -scrollTop) 0)))))
+
+
+(def unbind-global-keybindings (atom nil))
+
+
+(reg-fx
+  :keybindings/bind!
+  (fn []
+    (when (not (nil? @unbind-global-keybindings))
+      (@unbind-global-keybindings))
+    (reset! unbind-global-keybindings
+            (bind-changeable-global-keybindings))))
+

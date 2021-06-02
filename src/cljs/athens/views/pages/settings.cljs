@@ -2,11 +2,15 @@
   (:require
     ["@material-ui/icons/Check" :default Check]
     ["@material-ui/icons/NotInterested" :default NotInterested]
+    ["@material-ui/icons/SettingsBackupRestore" :default SettingsBackupRestore]
+    [athens.db :refer [default-keymap]]
     [athens.electron :as electron]
+    [athens.keybindings :refer [mousetrap-record]]
     [athens.util :refer [js-event->val]]
     [athens.views.buttons :refer [button]]
     [athens.views.textinput :as textinput]
     [athens.views.toggle-switch :as toggle-switch]
+    [athens.views.utils :refer [track-outside-click]]
     [cljs-http.client :as http]
     [cljs.core.async :refer [<!]]
     [goog.functions :as goog-functions]
@@ -94,8 +98,8 @@
 
 (defn handle-submit-email
   [s value]
-  (let [api       "https://dhx9n94ty5.execute-api.us-east-1.amazonaws.com/Prod/hello"
-        email-qs  "?email="
+  (let [api "https://dhx9n94ty5.execute-api.us-east-1.amazonaws.com/Prod/hello"
+        email-qs "?email="
         query-url (str api email-qs @value)]
     (go (let [resp (<! (http/get query-url))]
           (cond
@@ -265,7 +269,7 @@
 (defn remote-username-comp
   []
   (let [remote-graph-conf @(subscribe [:db/remote-graph-conf])
-        remote?           (:default? remote-graph-conf)]
+        remote? (:default? remote-graph-conf)]
     [setting-wrapper
      (when (not remote?) {:disabled true})
      [:<>
@@ -282,6 +286,79 @@
         [:p "For now, a username is only needed if you are connected to a server."]]]]]))
 
 
+;; -- Keymap Settings -----------------------------------------------------------
+(def display-unstable-keymap-settings?
+  (r/atom (boolean (js/localStorage.getItem "display-unstable-keymap-settings"))))
+
+
+;; Temporal function in window to enable this unstable feature
+(set! (.-toggleUnstableKeymapSettings js/window)
+      (fn []
+        (let [newVal (not @display-unstable-keymap-settings?)]
+          (reset! display-unstable-keymap-settings? newVal)
+          (js/localStorage.setItem "display-unstable-keymap-settings" newVal))))
+
+
+(def key-aliases-description
+  (array-map
+    :athena/toggle "Toggle athena"
+    :nav/back "Navigate back"
+    :nav/forward "Navigate forward"
+    :nav/daily-notes "Go to daily Notes"
+    :nav/pages "Go to pages"
+    :nav/graph "Go to graph"
+    :left-sidebar/toggle "Toggle left sidebar"
+    :right-sidebar/toggle "Toggle right sidebar"
+    :content/bold "Toggle bold"
+    :content/italic "Toggle italics"
+    :content/strikethrough "Toggle strikethrough"
+    :content/highlight "Toggle highlight"
+    :content/open-current-block-or-page "Open current block or page"))
+
+
+(defn key-shortcut
+  [key-alias]
+  (let [editing? (r/atom false)
+        handle-hotkey-change (fn [sequence]
+                               (when @editing?
+                                 (dispatch [:keymap/update key-alias (first sequence)])
+                                 (reset! editing? false)))
+        default-hotkey (key-alias default-keymap)
+        handle-click (fn []
+                       (reset! editing? true)
+                       (mousetrap-record handle-hotkey-change))
+        restore-default! (fn []
+                           (dispatch [:keymap/restore key-alias default-keymap]))]
+
+    (fn [key-alias]
+      (let [keymap @(subscribe [:keymap])
+            hotkey (key-alias keymap)
+            different-from-default? (not= hotkey default-hotkey)]
+        [:div {:style {:display "flex" :justify-content "space-between" :border-bottom "1px solid var(--border-color)" :padding "10px 0"}}
+         [:span {:style {:font-weight 500}} (key-alias key-aliases-description)]
+         [track-outside-click #(reset! editing? false)
+          [:div
+           [:div {:style {:display "flex" :justify-content "flex-end"}}
+            [:button {:on-click handle-click
+                      :style    {:display "block"}}
+             hotkey]
+            (when different-from-default?
+              [:> SettingsBackupRestore {:style {:margin-left "8px" :cursor "pointer"} :on-click restore-default!}])]
+           (when @editing? [:p {:style {:margin-top "4px"}} "Press new shortcut..."])]]]))))
+
+
+(defn keymap
+  []
+  (let [keymap @(subscribe [:keymap])]
+    [setting-wrapper
+     [:<>
+      [:header
+       [:h3 "Keymap"]]
+      [:main
+       [:div (for [key-alias (keys key-aliases-description)]
+               ^{:key key-alias} [key-shortcut key-alias])]]]]))
+
+
 (defn page
   []
   (let [s (r/atom (init-state))]
@@ -292,4 +369,6 @@
       [monitoring-comp s]
       [autosave-comp s]
       [backups-comp s]
-      [remote-username-comp]]]))
+      [remote-username-comp]
+      (when @display-unstable-keymap-settings?
+        [keymap])]]))

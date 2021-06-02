@@ -14,45 +14,6 @@
       KeyCodes)))
 
 
-(defn multi-block-selection
-  "When blocks are selected, handle various keypresses:
-  - shift+up/down: increase/decrease selection.
-  - enter: deselect and begin editing textarea
-  - backspace: delete all blocks
-  - up/down: change editing textarea
-  - tab: indent/unindent blocks
-  Can't use textarea-key-down from keybindings.cljs because textarea is no longer focused."
-  [e]
-  (let [selected-items @(subscribe [:selected/items])]
-    (when (not-empty selected-items)
-      (let [shift    (.. e -shiftKey)
-            key-code (.. e -keyCode)
-            enter?   (= key-code KeyCodes.ENTER)
-            bksp?    (= key-code KeyCodes.BACKSPACE)
-            up?      (= key-code KeyCodes.UP)
-            down?    (= key-code KeyCodes.DOWN)
-            tab?     (= key-code KeyCodes.TAB)
-            delete?  (= key-code KeyCodes.DELETE)]
-        (cond
-          enter? (do
-                   (dispatch [:editing/uid (first selected-items)])
-                   (dispatch [:selected/clear-items]))
-          (or bksp? delete?) (dispatch [:selected/delete selected-items])
-          tab? (do
-                 (.preventDefault e)
-                 (if shift
-                   (dispatch [:unindent/multi selected-items])
-                   (dispatch [:indent/multi selected-items])))
-          (and shift up?) (dispatch [:selected/up selected-items])
-          (and shift down?) (dispatch [:selected/down selected-items])
-          (or up? down?) (do
-                           (.preventDefault e)
-                           (dispatch [:selected/clear-items])
-                           (if up?
-                             (dispatch [:up (first selected-items) e])
-                             (dispatch [:down (last selected-items) e]))))))))
-
-
 (defn unfocus
   "Clears editing/uid when user clicks anywhere besides bullets, header, or on a block.
   Clears selected/items when user clicks somewhere besides a bullet point."
@@ -71,47 +32,6 @@
     (when (and (nil? closest)
                editing-uid)
       (dispatch [:editing/uid nil]))))
-
-
-;; -- Hotkeys ------------------------------------------------------------
-
-
-(defn key-down!
-  [e]
-  (let [{:keys [key-code ctrl meta shift alt]} (util/destruct-key-down e)
-        editing-uid @(subscribe [:editing/uid])]
-    (cond
-      (util/shortcut-key? meta ctrl) (condp = key-code
-                                       KeyCodes.S (dispatch [:save])
-
-                                       KeyCodes.K (dispatch [:athena/toggle])
-
-                                       KeyCodes.G (dispatch [:devtool/toggle])
-
-                                       KeyCodes.Z (let [editing-uid    @(subscribe [:editing/uid])
-                                                        selected-items @(subscribe [:selected/items])]
-                                                    ;; editing/uid must be nil or selected-items must be non-empty
-                                                    (when (or (nil? editing-uid)
-                                                              (not-empty selected-items))
-                                                      (if shift
-                                                        (dispatch [:redo])
-                                                        (dispatch [:undo]))))
-
-                                       KeyCodes.BACKSLASH (if shift
-                                                            (dispatch [:right-sidebar/toggle])
-                                                            (dispatch [:left-sidebar/toggle]))
-
-                                       KeyCodes.COMMA (router/navigate :settings)
-
-                                       KeyCodes.T (util/toggle-10x)
-                                       nil)
-      alt (condp = key-code
-            KeyCodes.LEFT (when (nil? editing-uid) (.back js/window.history))
-            KeyCodes.RIGHT (when (nil? editing-uid) (.forward js/window.history))
-            KeyCodes.D (router/nav-daily-notes)
-            KeyCodes.G (router/navigate :graph)
-            KeyCodes.A (router/navigate :pages)
-            nil))))
 
 
 ;; -- Clipboard ----------------------------------------------------------
@@ -216,8 +136,6 @@
 (defn init
   []
   (events/listen js/document EventType.MOUSEDOWN unfocus)
-  (events/listen js/window EventType.KEYDOWN multi-block-selection)
-  (events/listen js/window EventType.KEYDOWN key-down!)
   (events/listen js/window EventType.COPY copy)
   (events/listen js/window EventType.CUT cut)
   (prevent-save))

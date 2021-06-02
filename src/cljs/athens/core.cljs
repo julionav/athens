@@ -10,6 +10,7 @@
     [athens.effects]
     [athens.electron]
     [athens.events]
+    [athens.keybindings :as keybindings]
     [athens.listeners :as listeners]
     [athens.router :as router]
     [athens.style :as style]
@@ -117,6 +118,7 @@
   (style/init)
   (stylefy/tag "body" style/app-styles)
   (listeners/init)
+  (keybindings/init)
   (init-datalog-console)
   (if (util/electron?)
     (rf/dispatch-sync [:boot/desktop])

@@ -6,7 +6,7 @@
     [clojure.string :as string]
     [datascript.core :as d]
     [posh.reagent :refer [posh! pull q]]
-    [re-frame.core :refer [dispatch]]))
+    [re-frame.core :refer [dispatch subscribe clear-subscription-cache!]]))
 
 
 ;; -- Example Roam DBs ---------------------------------------------------
@@ -29,11 +29,27 @@
    :daily-notes?     true})
 
 
+(def default-keymap
+  {:athena/toggle "mod+k"
+   :10x/toggle "mod+t"
+   :nav/back "alt+left"
+   :nav/forward "alt+right"
+   :nav/daily-notes "alt+d"
+   :nav/pages "mod+p"
+   :nav/graph "mod+g"
+   :left-sidebar/toggle "mod+\\"
+   :right-sidebar/toggle "mod+shift+\\"
+   :content/bold "mod+b"
+   :content/italic "mod+i"
+   :content/strikethrough "mod+y"
+   :content/highlight "mod+h"
+   :content/open-current-block-or-page "mod+o"})
+
+
 ;; -- re-frame -----------------------------------------------------------
 
 (defonce rfdb {:user                {:name (or (js/localStorage.getItem "user/name")
                                                "Socrates")}
-
                :db/filepath         nil
                :db/synced           true
                :db/mtime            nil
@@ -52,7 +68,8 @@
                :daily-notes/items   []
                :selected/items      []
                :theme/dark          false
-               :graph-conf          default-graph-conf})
+               :graph-conf          default-graph-conf
+               :keymap              default-keymap})
 
 
 ;; -- JSON Parsing ----------------------------------------------------

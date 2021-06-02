@@ -23,9 +23,9 @@
 (def app-wrapper-style
   {:display "grid"
    :grid-template-areas
-   "'app-header app-header app-header'
-    'left-sidebar main-content secondary-content'
-   'devtool devtool devtool'"
+            "'app-header app-header app-header'
+             'left-sidebar main-content secondary-content'
+            'devtool devtool devtool'"
    :grid-template-columns "auto 1fr auto"
    :grid-template-rows "auto 1fr auto"
    :height "100vh"})
@@ -62,22 +62,22 @@
 
 (defn main
   []
-  (let [loading    (rf/subscribe [:loading?])
-        modal      (rf/subscribe [:modal])]
+  (let [loading (rf/subscribe [:loading?])
+        modal (rf/subscribe [:modal])
+        {:keys [msg type]} @(rf/subscribe [:db/snack-msg])]
     (fn []
       [:<>
        [alert]
-       (let [{:keys [msg type]} @(rf/subscribe [:db/snack-msg])]
-         [m-snackbar
-          {:message msg
-           :open (boolean msg)}
-          [:span
-           {:style {:background-color (case type
-                                        :success "green"
-                                        "red")
-                    :padding "10px 20px"
-                    :color "white"}}
-           msg]])
+       [m-snackbar
+        {:message msg
+         :open    (boolean msg)}
+        [:span
+         {:style {:background-color (case type
+                                      :success "green"
+                                      "red")
+                  :padding          "10px 20px"
+                  :color            "white"}}
+         msg]]
        [athena-component]
        (cond
          (and @loading @modal) [filesystem/window]
